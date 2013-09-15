@@ -9,7 +9,7 @@
 #include <Poco/Net/HTTPResponse.h>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/date_time/gregorian/gregorian.hpp>
-#include <sqlite3.h>
+
 
 #include <korelate/korelate.hpp>
 
@@ -117,8 +117,6 @@ namespace korelate {
 		
 	class quandl_ticker_source {
 		
-	public:
-		using CacheConnection = std::shared_ptr<sqlite3>;
 	private:
 		std::string m_apiKey;
 		CacheConnection m_cacheConn;
@@ -136,7 +134,8 @@ namespace korelate {
 		tStart(Clock::now()),
 		tEnd(tStart),
 		nDays(0),
-		fetchedValues(nullptr) {}
+		fetchedValues(nullptr) {
+		}
 		~quandl_ticker_source() { delete [] fetchedValues; }
 		
 		size_t equityCount() const{
@@ -161,11 +160,15 @@ namespace korelate {
 		};
 		
 		bool fetch();
+		
+			
 	};
 	
 	
 	class ctx_impl {
+		CacheConnection conn;
 	public:
+		ctx_impl(CacheConnection & conn);
 		void analyize(std::vector<equity> & hedges);
 		void dumpTree(boost::property_tree::ptree & tree);
 	};
@@ -176,36 +179,66 @@ namespace korelate {
 ////////////////
 ////////////////
 
-
-using namespace korelate;
-
-static std::shared_ptr<sqlite3> sqlOpen() {
-	sqlite3 * lite;
-	auto openError = sqlite3_open_v2("prices.db", &lite, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
-	if (openError != SQLITE_OK)
-		return nullptr;
-	
-	return {lite, [](sqlite3 * lite){
-		sqlite3_close_v2(lite);
-	}};
-}
-
 static std::shared_ptr<sqlite3_stmt> sqlPrepare(sqlite3 * sql, const char * q, size_t sz) {
 	sqlite3_stmt * stmt;
 	auto error = sqlite3_prepare_v2(sql, q, sz, &stmt, nullptr);
 	if (error != SQLITE_OK)
 		return nullptr;
-	
 	return {stmt, [](sqlite3_stmt * stmt){
 		sqlite3_finalize(stmt);
 	}};
 };
 
+static bool installSchema(sqlite3 * sql, sqlite3_stmt * stmt) {
+	return false;
+}
+
+
+using namespace korelate;
+ctx_impl::ctx_impl(CacheConnection & conn):conn(conn) {
+	{
+		auto sql = conn;
+		{
+			char qCreateSchemaDay[] = "CREATE TABLE day (date integer, exchange text, symbol text, open real, close real, low real, high real, primary key (date, exchange, symbol));";
+			
+			std::string schemaDayExistsError = "table day already exists";
+			
+			auto createCommand = sqlPrepare(sql.get(), qCreateSchemaDay, sizeof(qCreateSchemaDay)/sizeof(qCreateSchemaDay[0]));
+			std::string error(sqlite3_errmsg(sql.get()));
+			if (!createCommand) {
+				if (error != schemaDayExistsError) {
+					std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				}
+			}
+			else if (sqlite3_step(createCommand.get()) != SQLITE_DONE) {
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			}
+		}
+		
+		{
+			char qCreateSchemaHttpCache [] = "CREATE TABLE httpcache (path text, json text, primary key(path));";
+			std::string schemaCacheExistsError = "table httpcache already exists";
+			
+			auto createCommand = sqlPrepare(sql.get(), qCreateSchemaHttpCache, sizeof(qCreateSchemaHttpCache)/sizeof(qCreateSchemaHttpCache[0]));
+			std::string error(sqlite3_errmsg(sql.get()));
+			if (!createCommand) {
+				if (error != schemaCacheExistsError) {
+					std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				}
+			}
+			else if (sqlite3_step(createCommand.get()) != SQLITE_DONE) {
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			}
+		}
+		
+	}
+}
+
 void ctx_impl::analyize(std::vector<equity> &hedges) {
 	
-	const int nMaxDays = 7;
+	const int nMaxDays = 14;
 	
-	quandl_ticker_source quandl("mzTwizqpbUxtKqUEZKqs&columns");
+	quandl_ticker_source quandl("mzTwizqpbUxtKqUEZKqs&columns", conn);
 	quandl.setWindow(Clock::now() - std::chrono::hours(24*nMaxDays), nMaxDays);
 	quandl.setSymbols(hedges);
 	if (!quandl.fetch()) {
@@ -232,99 +265,6 @@ void ctx_impl::analyize(std::vector<equity> &hedges) {
 		}
 		vals.resetSymbol();
 	}
-	{
-		auto sql = sqlOpen();
-		
-		char qCreateSchema[] = "create table day (date integer, exchange text, symbol text, open real, close real, low real, high real, primary key (date, exchange, symbol));";
-		auto createCommand = sqlPrepare(sql.get(), qCreateSchema, sizeof(qCreateSchema)/sizeof(qCreateSchema[0]));
-		if (createCommand && (sqlite3_step(createCommand.get()) != SQLITE_OK)){
-			std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
-		}
-		
-	}
-	/*
-	struct Data {
-		float open;
-		float close;
-		float percentIncrease;
-	};
-	
-	const size_t arrayElements = nMaxDays * hedges.size();
-	std::unique_ptr<Data []> arrData(new Data[arrayElements]);
-	std::string dates[nMaxDays];
-	Data * pData = arrData.get();
-	memset(pData, 0, sizeof(pData[0]) * arrayElements);
-	
-	auto rows = tree.get_child("data");
-	int iDay = 0;
-	for (auto & row: rows) {
-		auto it = row.second.begin();
-		
-		//Date
-		dates[iDay] = it->second.data();
-		it++;
-		
-		for (int iHedge = 0; iHedge < hedges.size(); iHedge++) {
-			assert(it != row.second.end());
-			Data & data = pData[iDay * hedges.size() + iHedge];
-			
-			//Open
-			data.open = it->second.get_value<float>();
-			it++;
-			
-			//High
-			it++;
-			
-			//Low;
-			it++;
-			
-			//Close
-			data.close = it->second.get_value<float>();
-			it++;
-			
-			//Volume
-			it++;
-			
-			
-			data.percentIncrease = (data.close - data.open)/data.open * 100.0;
-		}
-		assert(it == row.second.end());
-		iDay++;
-	}
-	
-	int nDay = iDay;
-	iDay = 0;
-	const int printWidth = 9;
-	const int printPrecesion = 4;
-	
-	while(iDay < nDay) {
-		std::cout << dates[iDay] << std::endl;
-		for (int iOuterHedge = 0; iOuterHedge < hedges.size(); iOuterHedge++) {
-			Data & outerData = pData[iDay * hedges.size() + iOuterHedge];
-			std::cout
-			<< std::setw(printWidth) << hedges[iOuterHedge].symbol
-			<< std::setw(printWidth) << std::setprecision(printPrecesion) << outerData.open
-			<< std::setw(printWidth) << std::setprecision(printPrecesion) << outerData.close
-			<< std::setw(printWidth) << std::setprecision(printPrecesion) << outerData.percentIncrease
-			<< std::endl;
-		}
-		for (int iOuterHedge = 0; iOuterHedge < hedges.size(); iOuterHedge++) {
-			Data & outerData = pData[iDay * hedges.size() + iOuterHedge];
-			
-			for (int iInnerHedge = 0; iInnerHedge < hedges.size(); iInnerHedge++) {
-				if (iInnerHedge <= iOuterHedge) continue;
-				Data & innerData = pData[iDay * hedges.size() + iInnerHedge];
-				std::cout
-				<< std::setw(printWidth) << hedges[iInnerHedge].symbol << "/" << hedges[iOuterHedge].symbol << "\t"
-				<< std::setw(printWidth) << std::setprecision(printPrecesion) << innerData.percentIncrease/outerData.percentIncrease
-				<< std::endl;
-			}
-
-		}
-		std::cout << std::endl;
-		iDay++;
-	}
-	*/
 }
 
 void ctx_impl::dumpTree(boost::property_tree::ptree &tree) {
@@ -367,16 +307,72 @@ bool quandl_ticker_source::fetch() {
 		pathStream << "&trim_start=" << toString(tmLastMonth) << "&trim_end=" << toString(tmNow);
 	}
 	
-	
-	Poco::Net::HTTPClientSession session("www.quandl.com");
-	Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, pathStream.str(), Poco::Net::HTTPMessage::HTTP_1_1);
-	session.sendRequest(request);
-	Poco::Net::HTTPResponse response;
-	auto & data = session.receiveResponse(response);
-	auto status = response.getStatus();
-	assert(status == Poco::Net::HTTPResponse::HTTPStatus::HTTP_OK || status == 422);
 	boost::property_tree::ptree tree;
-	boost::property_tree::read_json(data, tree);
+	bool bCacheHit = false;
+	{
+		auto sql = m_cacheConn;
+		static const char lookupQuery[] = "select json from httpcache where path=?1;";
+		auto lookupStmt = sqlPrepare(m_cacheConn.get(), lookupQuery, sizeof(lookupQuery)/sizeof(lookupQuery[0]));
+		if (!lookupStmt) {
+			std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			return false;
+		}
+		if (sqlite3_bind_text(lookupStmt.get(), 1, pathStream.str().c_str(), -1, nullptr) != SQLITE_OK){
+			std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			return false;
+		}
+		if (sqlite3_step(lookupStmt.get()) != SQLITE_ROW){
+			std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			return false;
+		}
+		auto chars = sqlite3_column_text(lookupStmt.get(), 0);
+		if (!chars) {
+			std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+			return false;
+		}
+		std::stringstream stream;
+		stream << chars;
+		boost::property_tree::read_json(stream, tree);
+		bCacheHit = true;
+	}
+	
+	if (!bCacheHit){
+		Poco::Net::HTTPClientSession session("www.quandl.com");
+		Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, pathStream.str(), Poco::Net::HTTPMessage::HTTP_1_1);
+		session.sendRequest(request);
+		Poco::Net::HTTPResponse response;
+		auto & data = session.receiveResponse(response);
+		auto status = response.getStatus();
+		assert(status == Poco::Net::HTTPResponse::HTTPStatus::HTTP_OK || status == 422);
+		
+		boost::property_tree::read_json(data, tree);
+		std::stringstream buff;
+		//std::streambuf buff;
+		boost::property_tree::write_json(buff, tree);
+		std::string json(buff.str());
+		
+		{
+			auto sql = m_cacheConn;
+			static const char insertQuery [] = "insert into httpcache values (?1,?2);";
+			auto insertStmt = sqlPrepare(m_cacheConn.get(), insertQuery, sizeof(insertQuery)/sizeof(insertQuery[0]));
+			if (!insertStmt) {
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				return false;
+			}
+			if (sqlite3_bind_text(insertStmt.get(), 1, pathStream.str().c_str(), -1, nullptr) != SQLITE_OK){
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				return false;
+			}
+			if (sqlite3_bind_text(insertStmt.get(), 2, json.c_str(), -1, nullptr) != SQLITE_OK) {
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				return false;
+			}
+			if (sqlite3_step(insertStmt.get()) != SQLITE_DONE){
+				std::cout <<"Error " << sqlite3_errcode(sql.get()) << ":" << sqlite3_errstr(sqlite3_errcode(sql.get())) << ":" << sqlite3_errmsg(sql.get()) << std::endl;
+				return false;
+			}
+		}
+	}
 	
 	auto errors = tree.get_child("errors");
 	if (!errors.empty() || errors.size()) {
@@ -397,6 +393,8 @@ bool quandl_ticker_source::fetch() {
 	delete [] fetchedValues;
 	fetchedValues = new float[dayCount() * equityCount() * 5];
 	
+	TimePoint lastTime;
+	
 	quotes q(fetchedDays, fetchedValues, dayCount(), equityCount());
 	while(q.nextDay() && dayIt != dayEnd) {
 		auto it = dayIt->second.begin();
@@ -405,7 +403,7 @@ bool quandl_ticker_source::fetch() {
 		TimePoint currentTime;
 		boost::gregorian::date d(boost::gregorian::from_simple_string(it->second.data()));
 		auto tm = boost::gregorian::to_tm(d);
-		q.timepoint() = Clock::from_time_t(std::mktime(&tm));
+		q.timepoint() = lastTime = Clock::from_time_t(std::mktime(&tm));
 		it++;
 
 		int i = 0;
@@ -436,10 +434,13 @@ bool quandl_ticker_source::fetch() {
 		}
 		dayIt++;
 	}
+	
+	
+	
 	return true;
 }
 
-ctx::ctx(): m_impl(new ctx_impl) {
+ctx::ctx(CacheConnection conn): m_impl(new ctx_impl(conn)) {
 
 }
 

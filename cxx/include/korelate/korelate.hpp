@@ -1,6 +1,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <sqlite3.h>
 
 namespace korelate {
 	class ctx_impl;
@@ -24,6 +25,8 @@ namespace korelate {
 			};
 		}
 	};
+	
+	using CacheConnection = std::shared_ptr<sqlite3>;
 		
 	struct equity {
 	public:
@@ -36,7 +39,7 @@ namespace korelate {
 	private:
 		std::unique_ptr<ctx_impl> m_impl;
 	public:
-		ctx();
+		ctx(CacheConnection conn);
 		~ctx();
 		void analyize(std::vector<equity> && hedges);
 	};
