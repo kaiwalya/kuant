@@ -1,5 +1,6 @@
 import sbt._
 import Keys._
+import com.typesafe.sbteclipse.plugin.EclipsePlugin._
 
 object KuantBuild extends Build {
 	val mySettings = Seq(
@@ -10,7 +11,8 @@ object KuantBuild extends Build {
 		resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/",
 		libraryDependencies += "com.typesafe.akka" %% "akka-actor" % "2.2.3",
 		resolvers += "spray repo" at "http://repo.spray.io",
-		libraryDependencies += "io.spray" % "spray-client" % "1.2.0"
+		libraryDependencies += "io.spray" % "spray-client" % "1.2.0",
+		EclipseKeys.createSrc := EclipseCreateSrc.Default + EclipseCreateSrc.Resource
 	)
 	lazy val root: Project = Project(id = "kuant",
 		base = file("."),
