@@ -12,6 +12,7 @@ object KuantBuild extends Build {
 		libraryDependencies += "com.typesafe.akka" %% "akka-actor" % "2.2.3",
 		resolvers += "spray repo" at "http://repo.spray.io",
 		libraryDependencies += "io.spray" % "spray-client" % "1.2.0",
+		libraryDependencies += "io.spray" %% "spray-json" % "1.2.5",
 		EclipseKeys.createSrc := EclipseCreateSrc.Default + EclipseCreateSrc.Resource
 	)
 	lazy val root: Project = Project(id = "kuant",
