@@ -1,5 +1,8 @@
 package com.kaiwalya.kuant;
 
+import java.util.concurrent.TimeoutException;
+
+import scala.concurrent.duration.Duration;
 import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestSuite;
@@ -31,8 +34,22 @@ public class AppTest
     /**
      * Rigourous Test :-)
      */
-    public void testApp()
+    public void testAppDoesntQuicklyExit()
+    {	
+    	try {
+	    	Duration d = Duration.create("0ms");
+			App.create().awaitTermination(d);
+    	}
+    	catch(Exception e) {
+    		assertTrue(e instanceof TimeoutException);
+    		return;
+    	}
+    	assertTrue(false);
+    }
+    
+    public void testAppDoesExit()
     {
-        assertTrue( true );
+    	Duration d = Duration.create("1 day");
+		App.create().awaitTermination(d);
     }
 }
